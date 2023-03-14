@@ -1,0 +1,8 @@
+other/
+.vscode/
+*.exe
+*.pdb
+*.obj
+*.bin
+*.so
+ols.json
