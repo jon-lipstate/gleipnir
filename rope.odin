@@ -3,41 +3,17 @@ import "core:fmt"
 import "core:slice"
 
 main :: proc() {
-	l1 := make_leaf(transmute([]u8)string("Ropes")) // 0-4
-	r1 := make_leaf(transmute([]u8)string("Are")) //5-7
-	l2 := make_leaf(transmute([]u8)string("Easy")) //8-11
-	r2 := make_leaf(transmute([]u8)string("Peasy")) //12-16
-	// bc := concat(l1, r1)
-	// c := index_char(bc, 8)
-	// fmt.println(c)
-	// assert(c == 'A')
-	// b1 := make_branch(l1, r1)
-	// b2 := make_branch(l2, r2)
-	// b := make_branch(b1, b2)
-	// parent, rem := find_parent(b, -6)
-	// pn := new(Node)
-	// pn^ = parent^
-	// bstr := to_string(pn)
-	b3 := make_branch(r1, l2)
-
-	insert(b3, 2, "_not_")
-
-	// fmt.println(len(to_string(b)))
-	// s := split(b, 4)
-	// sstr := to_string(s)
-	// fmt.println("SPLIT RIGHT:", sstr)
-	// rstr := to_string(b)
-	// fmt.println("SPLIT LEFT:", rstr)
-	// fmt.println(string(parent.left.(^Leaf)), rem)
+	test_insert(nil)
 }
 to_string :: proc(node: ^Node, allocator := context.allocator) -> string {
 	context.allocator = allocator
 	weight := get_weight(node)
 	str := make([]u8, weight)
 	to_str :: proc(node: ^Node, dest: []u8) {
-		switch n in node {
+		switch n in node.kind {
 		case (Leaf):
-			copy_slice(dest, n.data)
+			copy_slice(dest, n)
+		// fmt.println(string(n))
 		case (Branch):
 			if n.left != nil {
 				to_str(n.left, dest)
@@ -58,22 +34,21 @@ invalid_code_path :: proc(p: string) {
 Branch :: struct {
 	left:   ^Node,
 	right:  ^Node,
-	parent: ^Node,
 	weight: int, // aggregate weights of left subtree
 }
-Leaf :: struct {
-	data:   []u8,
+Leaf :: []u8
+Node :: struct {
 	parent: ^Node,
-}
-Node :: union {
-	Branch,
-	Leaf,
+	kind:   union {
+		Branch,
+		Leaf,
+	},
 }
 // Finds a character at index `i` and returns it (Avg: O(log-n),Worst:O(n))
 // TODO: Return a Rune??
 index_char :: proc(node: ^Node, p: int) -> u8 {
 	v: u8
-	switch n in node {
+	switch n in node.kind {
 	case (Branch):
 		if p >= n.weight && n.right != nil {
 			v = index_char(n.right, p - n.weight)
@@ -81,11 +56,8 @@ index_char :: proc(node: ^Node, p: int) -> u8 {
 			v = index_char(n.left, p)
 		}
 	case (Leaf):
-		if p >=
-		   len(
-			   n.data,
-		   ) {panic(fmt.tprintf("Index [%v] exceeds length of Leaf: [%s], len: [%v]", p, string(n.data), len(n.data)))}
-		v = n.data[p]
+		if p >= len(n) {panic(fmt.tprintf("Index [%v] exceeds length of Leaf: [%s], len: [%v]", p, string(n), len(n)))}
+		v = n[p]
 	}
 	return v
 }
@@ -94,7 +66,7 @@ index_char :: proc(node: ^Node, p: int) -> u8 {
 find_node :: proc(node: ^Node, p: int) -> (leaf: ^Node, p_local: int) {
 	leaf = nil
 	p_local = p
-	switch n in node {
+	switch n in node.kind {
 	case (Branch):
 		if p >= n.weight && n.right != nil {
 			leaf, p_local = find_node(n.right, p - n.weight)
@@ -102,10 +74,7 @@ find_node :: proc(node: ^Node, p: int) -> (leaf: ^Node, p_local: int) {
 			leaf, p_local = find_node(n.left, p)
 		}
 	case (Leaf):
-		if p >=
-		   len(
-			   n.data,
-		   ) {panic(fmt.tprintf("Index [%v] exceeds length of Leaf: [%s], len: [%v]", p, string(n.data), len(n.data)))}
+		if p >= len(n) {panic(fmt.tprintf("Index [%v] exceeds length of Leaf: [%s], len: [%v]", p, string(n), len(n)))}
 		leaf = node
 	}
 	return leaf, p_local
@@ -115,53 +84,46 @@ find_node :: proc(node: ^Node, p: int) -> (leaf: ^Node, p_local: int) {
 get_weight :: proc(node: ^Node) -> int {
 	w := 0
 	if node == nil {return w}
-	switch n in node {
+	switch n in node.kind {
 	case (Branch):
-		w += n.weight // contains full left subtree
+		w += get_weight(n.left) // contains full left subtree
 		w += get_weight(n.right) // recurse right subtree
 	case (Leaf):
-		w += len(n.data)
+		w += len(n)
 	}
 	return w
 }
+get_root :: proc(node: ^Node) -> ^Node {
+	root := node
+	for root.parent != nil {
+		root = root.parent
+	}
+	return root
+}
+// Recursively resets weight upwards in the tree
+reset_weights :: proc(node: ^Node) {
+	switch n in &node.kind {
+	case (Branch):
+		n.weight = get_weight(n.left)
+		if node.parent != nil {reset_weights(node.parent)}
+	case (Leaf):
+		reset_weights(node.parent)
+	}
+}
+
 // produces a new branch wrapping the left and right
 // O(log-n)
 concat :: proc(left: ^Node, right: ^Node) -> ^Node {
 	root := make_branch(left, right)
 	return root
 }
-// Clears old parent pointer
-//O(1)
-set_parent :: proc(parent: ^Node, child: ^Node) {
-	parent_ptr: ^^Node
-	switch node in child {
-	case (Branch):
-		parent_ptr = &node.parent
-	case (Leaf):
-		parent_ptr = &node.parent
-	}
-	// // if there was a previous parent, clear it:
-	// if parent_ptr^ != nil {
-	// 	old_parent := &parent_ptr^.(Branch)
-	// 	if old_parent.left == child {
-	// 		old_parent.left = nil
-	// 	} else if old_parent.right == child {
-	// 		old_parent.right = nil
-	// 	} else {invalid_code_path(#procedure)}
-	// }
-	parent_ptr^ = parent
-}
+
 //Remove child from parent, and parent from child
 //O(1)
 detach_child :: proc(parent: ^Node, child: ^Node) -> (was_left: bool) {
-	assert(parent_of(child) == parent)
-	switch c in child {
-	case (Branch):
-		c.parent = nil
-	case (Leaf):
-		c.parent = nil
-	}
-	pbr := &parent.(Branch)
+	assert(child.parent == parent)
+	child.parent = nil
+	pbr := &parent.kind.(Branch)
 	if child == pbr.left {
 		pbr.left = nil
 		return true
@@ -176,13 +138,13 @@ detach_child :: proc(parent: ^Node, child: ^Node) -> (was_left: bool) {
 make_branch :: proc(left: ^Node, right: ^Node, allocator := context.allocator) -> ^Node {
 	context.allocator = allocator
 	node := new(Node)
-	node^ = Branch {
+	node.kind = Branch {
 		left   = left,
 		right  = right,
 		weight = get_weight(left), // <-- O(log-n)
 	}
-	set_parent(node, left)
-	set_parent(node, right)
+	left.parent = node
+	right.parent = node
 	return node
 }
 //Parent is _not_ set
@@ -190,169 +152,151 @@ make_branch :: proc(left: ^Node, right: ^Node, allocator := context.allocator) -
 make_leaf :: proc(str: []u8, allocator := context.allocator) -> ^Node {
 	context.allocator = allocator
 	leaf := new(Node)
-	leaf^ = Leaf{slice.clone(str, allocator), nil}
+	leaf.kind = slice.clone(str, allocator)
 	return leaf
 }
-destroy_leaf :: proc(leaf: ^^Leaf) {
-	delete(leaf^^.data)
-	free(leaf^)
+destroy_leaf :: proc(leaf_node: ^^Node) {
+	delete(leaf_node^.kind.(Leaf))
+	free(leaf_node^)
 }
 
-//mutates left, returns right side
+//mutates left, returns right side, resets weights
 // O(log-n) i think?
 split :: proc(node: ^Node, p: int) -> ^Node {
 	assert(p > 0 && get_weight(node) > p, "cannot split 0th or last index")
 	leaf_node, leaf_idx, did_split := split_at_p(node, p)
 	//
-	leaf := &leaf_node.(Leaf)
-	branch_node := leaf.parent
-	branch := &branch_node.(Branch)
+	leaf := &leaf_node.kind.(Leaf)
+	branch_node := leaf_node.parent
+	branch := &branch_node.kind.(Branch)
 	right_tree: ^Node = nil
 	parent: ^Node
 	self: ^Node
 	//
 	if leaf_idx == 0 && branch.left == leaf_node {
 		// Case 1: Before Left
-		right_tree = leaf.parent
-		parent = right_tree.(Branch).parent
+		right_tree = leaf_node.parent
+		parent = right_tree.parent
 		self = right_tree
-		if parent.(Branch).left == self {
-			(&parent.(Branch)).left = nil
+		if parent.kind.(Branch).left == self {
+			(&parent.kind.(Branch)).left = nil
 		} else {
-			(&parent.(Branch)).right = nil
+			(&parent.kind.(Branch)).right = nil
 		}
-	} else if leaf_idx >= get_weight(branch_node) {
-		fmt.println("IDX GTE RIGHT - NOT POSSIBLE (?)") // todo: delete this else if once proven out
-		invalid_code_path(#procedure)
 	} else {
+		assert(leaf_idx < get_weight(branch_node))
 		// Case 2: Between the branches
 		right_tree = branch.right
 		branch.right = nil
-		parent = branch.parent
+		parent = branch_node.parent
 		self = branch_node
 	}
 	//Clip the right tree: O(log-n) for loop
 	for parent != nil {
-		if parent.(Branch).right != self && parent.(Branch).right != nil {
-			right_tree = concat(right_tree, parent.(Branch).right) // O(log-n) concat
-			(&parent.(Branch)).right = nil
+		if parent.kind.(Branch).right != nil && parent.kind.(Branch).right != self {
+			right_tree = concat(right_tree, parent.kind.(Branch).right) // O(log-n) concat
+			(&parent.kind.(Branch)).right = nil
 		}
 		self = parent
-		parent = parent.(Branch).parent
+		parent = parent.parent
 	}
+	reset_weights(leaf_node)
 	return right_tree
 }
 // Splits a leaf-node into two and attaches a floating parent branch
 // O(s)
-split_leaf :: proc(leaf: ^^Leaf, p: int) -> ^Node {
-	left := make_leaf(leaf^.data[:p])
-	right := make_leaf(leaf^.data[p:])
+split_leaf :: proc(leaf_node: ^^Node, p: int) -> ^Node {
+	assert(p >= 0 && p < len(leaf_node^.kind.(Leaf)))
+	left := make_leaf(leaf_node^.kind.(Leaf)[:p])
+	right := make_leaf(leaf_node^.kind.(Leaf)[p:])
 	root := make_branch(left, right) // O(log-h) [h=1]
-	set_parent(root, left)
-	set_parent(root, right)
-	destroy_leaf(leaf)
+	left.parent = root
+	right.parent = root
+	destroy_leaf(leaf_node)
+	leaf_node^ = left
 	return root
 }
 // O(log-n)
 split_at_p :: proc(node: ^Node, p: int) -> (leaf_node: ^Node, leaf_idx: int, did_split: bool) {
 	leaf_node, leaf_idx = find_node(node, p) // O(log-n)
-	leaf := &leaf_node.(Leaf)
-	branch_node := leaf.parent
-	branch := &branch_node.(Branch)
+	leaf := &leaf_node.kind.(Leaf)
+	assert(leaf_idx >= 0 && leaf_idx < len(leaf))
+	branch_node := leaf_node.parent
+	branch := &branch_node.kind.(Branch)
 	// Split the leaf, cursor was inside its text:
-	if len(leaf.data) - 1 > leaf_idx && leaf_idx != 0 {
+	if len(leaf) > leaf_idx - 1 && leaf_idx != 0 {
 		did_split = true
-		fmt.println("inside split,L", to_string(leaf_node))
-		fmt.println("inside split,B", to_string(branch_node))
-		new_branch_node := split_leaf(&leaf, leaf_idx) // O(s)
+		new_branch_node := split_leaf(&leaf_node, leaf_idx) // O(s)
 		if branch.left == leaf_node {branch.left = new_branch_node} else {branch.right = new_branch_node}
-		set_parent(branch_node, new_branch_node)
+		new_branch_node.parent = branch_node
 	}
 	return leaf_node, leaf_idx, did_split
 }
 
-// is_left_child :: proc(node: ^Node) -> bool {
-// 	parent_node: ^Node = parent_of(node)
-// 	assert(parent_node != nil, "nil parent for `is_left_child`")
-// 	return (&parent_node.(Branch)).left == node
-// }
-parent_of :: proc(node: ^Node) -> ^Node {
-	parent_node: ^Node
-	switch n in node {
-	case (Branch):
-		parent_node = n.parent
-	case (Leaf):
-		parent_node = n.parent
+// O(log-n)
+insert_text :: proc(root: ^Node, p: int, s: string, allocator := context.allocator) {
+	leaf_node, leaf_idx, did_split := split_at_p(root, p)
+	parent := leaf_node.parent
+	was_left := detach_child(parent, leaf_node) // TODO: why is everything is a left node ??
+	new_leaf := make_leaf(transmute([]u8)s)
+	left := leaf_idx == 0 ? new_leaf : leaf_node
+	right := leaf_idx == 0 ? leaf_node : new_leaf
+	new_branch := concat(left, right)
+	new_branch.parent = parent
+	if was_left {
+		(&parent.kind.(Branch)).left = new_branch
+	} else {
+		(&parent.kind.(Branch)).right = new_branch
 	}
-	return parent_node
+	reset_weights(leaf_node)
 }
 
-// O(log-n)
-insert :: proc(root: ^Node, p: int, s: string, allocator := context.allocator) {
-	// rhs := split(root, p)
-	leaf_node, leaf_idx, did_split := split_at_p(root, p)
-	// leaf := &leaf_node.(Leaf)
-	// existing_branch := leaf.parent
-	// branch := &existing_branch.(Branch)
-	// is_left := is_left_child(existing_branch)
-	parent := parent_of(leaf_node)
-	// is_left_child:=is_left_child(leaf_node)
-	was_left := detach_child(parent, leaf_node)
-	new_leaf := make_leaf(transmute([]u8)s)
-	new_branch := concat(leaf_node, new_leaf)
-	set_parent(parent, new_branch)
-	if was_left {
-		(&parent.(Branch)).left = new_leaf
-	} else {
-		(&parent.(Branch)).right = new_leaf
-	}
-	fmt.println("split-new_branch", to_string(new_branch))
-	fmt.println("split-parent", to_string(parent))
+delete_text :: proc(root: ^Node, start: int, end: int) -> ^Node {
+	panic("not impl")
+}
 
-	// new_branch_node := concat(leaf_node, new_leaf) // BRANCH(ARE-NOT)
-	// set_parent(existing_branch, new_branch_node)
-	// new2_branch_node := concat(existing_branch, new_branch_node)
-	// set_parent(parent, new2_branch_node)
-	// if is_left {
-	// 	assert((&parent.(Branch)).left != nil)
-	// 	fmt.println("was left", to_string((&parent.(Branch)).left))
-	// 	(&parent.(Branch)).left = new2_branch_node
-	// } else {
-	// 	fmt.println("was right")
-	// 	assert((&parent.(Branch)).right == existing_branch)
-	// 	(&parent.(Branch)).right = new2_branch_node
-	// }
+replace_text :: proc(root: ^Node, start: int, end: int, new_string: string) -> ^Node {
+	panic("not impl")
+}
 
-	// fmt.println("split-new_branch_node", to_string(new_branch_node))
-	// fmt.println("split-new2_branch_node", to_string(new2_branch_node))
-	fmt.println("split-parent", to_string(parent))
-	// fmt.println("split-node", to_string(node))
-	// fmt.println("split-rhs", to_string(rhs))
+substring :: proc(root: ^Node, start: int, end: int) -> ^Node {
+	panic("not impl")
+}
 
+rebalance :: proc(root: ^Node) -> ^Node {
+	panic("not impl")
+}
+
+Iterator :: struct {}
+iterator_init :: proc(root: ^Node) -> Iterator {
+	panic("not impl")
+}
+iterator_next :: proc(it: ^Iterator) -> bool {
+	panic("not impl")
+}
+iterator_current :: proc(it: ^Iterator) -> u8 {
+	panic("not impl")
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 import "core:testing"
 
-@(private)
-@(test)
+// @(test)
+// test_index :: proc(t: ^testing.T) {
+// 	rope := make_test_rope()
+// 	R := rune(index_char(rope, 0))
+// 	s := rune(index_char(rope, 4))
+// 	A := rune(index_char(rope, 5))
+// 	E := rune(index_char(rope, 8))
+// 	assert(R == 'R')
+// 	assert(s == 's')
+// 	assert(A == 'A')
+// 	assert(E == 'E')
 
-test_index :: proc(t: ^testing.T) {
-	rope := make_test_rope()
-
-	// insert(&r, 0, "Hello") // insert at start
-	// insert(&r, 5, ",") // insert in middle
-	// insert(&r, 6, " ")
-	// insert(&r, 7, "world") // insert at end
-
-	// line := make([]u8, 12)
-	// n := copy_line_from_rope(&line[0], len(line), &r, 0)
-	// text := string(line)
-
-	// assert(text == "Hello, world", "expected strings to match")
-	// assert(n == 12, "expected 12 chars copied")
-}
+// 	// assert(text == "Hello, world", "expected strings to match")
+// 	// assert(n == 12, "expected 12 chars copied")
+// }
 //text-fixture
 @(private)
 make_test_rope :: proc() -> ^Node {
@@ -364,4 +308,133 @@ make_test_rope :: proc() -> ^Node {
 	b2 := make_branch(l2, r2)
 	b := make_branch(b1, b2)
 	return b
+}
+
+// @(test)
+// test_split :: proc(t: ^testing.T) {
+// 	rope := make_test_rope()
+// 	right_side := split(rope, 8)
+// 	assert(to_string(rope) == string("RopesAre"), "--> Split on word Boundary")
+// 	assert(to_string(right_side) == string("EasyPeasy"))
+
+// 	rope2 := make_test_rope()
+// 	right_side2 := split(rope2, 7)
+
+// 	assert(to_string(rope2) == string("RopesAr"), "--> Split mid-word")
+// 	assert(to_string(right_side2) == string("eEasyPeasy"))
+// }
+@(test)
+test_insert :: proc(t: ^testing.T) {
+	root := make_test_rope()
+	insert_text(root, 9, "NOT")
+	// assert(to_string(root) == "RopesAreENOTasyPeasy")
+
+	root2 := make_test_rope()
+	insert_text(root2, 8, "NOT")
+	assert(to_string(root2) == "RopesAreNOTEasyPeasy")
+
+	root3 := make_test_rope()
+	insert_text(root3, 7, "NOT")
+	assert(to_string(root3) == "RopesArNOTeEasyPeasy")
+	// RopesAreEasyPeasy
+	// 0123456789 123456789
+	// RopesAreENOTasyPeasy
+
+}
+// RopeIterator :: struct {
+// 	current_node:    ^Node,
+// 	global_position: int,
+// 	local_position:  int,
+// 	total_length:    int,
+// }
+
+// next_leaf_node :: proc(node: ^Node) -> ^Node {
+// 	if node == nil {return nil}
+// 	// In-order traversal to find the next leaf node
+// 	current := node
+// 	if _, was_a_leaf := node.kind.(Leaf); was_a_leaf {
+// 		current = node.parent
+// 		current_branch_right := (&current.kind.(Branch)).right
+// 		if current_branch_right != node && current_branch_right != nil {
+// 			return current_branch_right
+// 		}
+// 	}
+// 	// We know we're not in a bottom branch, go up then down and left:
+// 	next := current.parent
+// 	// go up till 
+// 	for next != nil {
+// 		next_branch := &next.kind.(Branch)
+// 		if next_branch.left == current && next_branch.right != nil {
+// 			next = next_branch.right
+// 			// go down to bottom left leaf:
+// 			if vv, is_leaf := next.kind.(Leaf); is_leaf {
+// 				fmt.println("VVV", string(vv))
+// 			}
+// 			for {
+// 				next = (&next.kind.(Branch)).left
+// 				if _, next_is_leaf := next.kind.(Leaf); next_is_leaf {
+// 					return next
+// 				}
+// 			}
+// 		} else {
+// 			current = next
+// 			next = next.parent
+// 		}
+// 	}
+// 	return nil
+// }
+
+// rope_iterator :: proc(it: ^RopeIterator) -> (char: u8, index: int, ok: bool) {
+// 	if it.global_position < it.total_length {
+// 		leaf := &it.current_node.kind.(Leaf)
+// 		char = leaf[it.local_position]
+// 		index = it.global_position
+
+// 		it.local_position += 1
+// 		if it.local_position >= len(leaf) {
+// 			it.current_node = next_leaf_node(it.current_node)
+// 			it.local_position = 0
+// 		}
+
+// 		it.global_position += 1
+// 		ok = true
+// 	} else {
+// 		ok = false
+// 	}
+// 	return char, index, ok
+// }
+// @(test)
+// test_iterator :: proc(t: ^testing.T) {
+// 	// root := make_test_rope()
+// 	// insert_text(root, 6, "_not_")
+// 	// fmt.println(to_string(root))
+// 	// first_leaf, _ := find_node(root, 0)
+// 	// it := RopeIterator {
+// 	// 	current_node    = first_leaf,
+// 	// 	global_position = 0,
+// 	// 	local_position  = 0,
+// 	// 	total_length    = get_weight(root),
+// 	// }
+// 	// for ch, index in rope_iterator(&it) {
+// 	// 	fmt.print(rune(ch))
+// 	// }
+// }
+
+import "core:strings"
+print_tree :: proc(node: ^Node, depth: int = 0) {
+	if node == nil {return}
+	spaces := strings.repeat("-", depth)
+	sb := strings.builder_make()
+	strings.write_string(&sb, spaces)
+	//strings.to_string(sb)
+	switch n in node.kind {
+	case (Leaf):
+		strings.write_string(&sb, fmt.aprintf("Leaf:(%v)[%v]", len(n), string(n)))
+		fmt.println(strings.to_string(sb))
+	case (Branch):
+		strings.write_string(&sb, fmt.aprintf("Branch:(w:%v)", n.weight))
+		fmt.println(strings.to_string(sb))
+		print_tree(n.left, depth + 1)
+		print_tree(n.right, depth + 1)
+	}
 }
