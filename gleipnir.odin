@@ -6,27 +6,19 @@ import _spall "core:prof/spall"
 spall :: _spall
 spall_ctx := spall.Context{}
 spall_buffer := spall.Buffer{}
-TRACE_MODE :: false
-when TRACE_MODE {
-	TRACE :: #force_inline proc(ctx: ^spall.Context, buf: ^spall.Buffer, loc: string) {
-		spall.SCOPED_EVENT(ctx, buf, loc)
-	}
-} else {
-	TRACE :: #force_inline proc(ctx: ^spall.Context, buf: ^spall.Buffer, loc: string) {}
-}
+TRACE_MODE :: true
+TRACE :: spall.SCOPED_EVENT
 
 //
 main :: proc() {
-	when TRACE_MODE {
-		// Profiling Setup:
-		spall_ctx = spall.context_create("gleipnir.spall")
-		buffer_backing := make([]u8, 1 << 18) // 256kb profiling buffer
-		spall_buffer = spall.buffer_create(buffer_backing)
-		defer delete(buffer_backing)
-		defer spall.context_destroy(&spall_ctx)
-		defer spall.buffer_destroy(&spall_ctx, &spall_buffer)
-		spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
-	}
+	// Profiling Setup:
+	spall_ctx = spall.context_create("gleipnir.spall")
+	buffer_backing := make([]u8, 1 << 16) // 64kb profiling buffer
+	spall_buffer = spall.buffer_create(buffer_backing)
+	defer delete(buffer_backing)
+	defer spall.context_destroy(&spall_ctx)
+	defer spall.buffer_destroy(&spall_ctx, &spall_buffer)
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	//
 	rope := &Rope{}
 	insert_text(rope, 0, "Ropes")
@@ -34,14 +26,14 @@ main :: proc() {
 	insert_text(rope, 8, "Easy")
 	insert_text(rope, 12, "Peasy")
 	insert_text(rope, 8, "_NOT_")
+	delete_text(rope, 2, 12)
 
-	print_rope(rope)
+	print_rope(rope) // (Ropes)(Are)(_NOT_)(Easy)(Peasy)
 }
 //
 
 Rope :: struct {
 	head: ^Node,
-	// todo: trace block, other memory stuff?
 }
 Trace :: struct {
 	self:    ^Node,
@@ -49,7 +41,7 @@ Trace :: struct {
 }
 Position :: int
 Branch :: struct {
-	weight: int, // aggregate weights of left subtree
+	weight: int, // left subtree
 	left:   ^Node,
 	right:  ^Node,
 }
@@ -59,7 +51,8 @@ Node :: union {
 	Leaf,
 }
 get_height :: proc(node: ^Node) -> int {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	if node == nil {return 0}
 	value := 1
 	switch n in node {
 	case (Branch):
@@ -73,14 +66,14 @@ get_height :: proc(node: ^Node) -> int {
 }
 //
 update_weight :: proc(node: ^Node) {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	b := (&node.(Branch))
 	b.weight = get_weight(b.left, true)
 }
 // O(log-n)
 // updating :: true: recurse left subtree, false: use node's weight
 get_weight :: proc(node: ^Node, updating: bool = false) -> int {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	w := 0
 	if node == nil {return w}
 	switch n in node {
@@ -94,57 +87,20 @@ get_weight :: proc(node: ^Node, updating: bool = false) -> int {
 }
 // O(log-n) [get_weight]
 concat :: proc(left: ^Node, right: ^Node, allocator := context.allocator) -> ^Node {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	context.allocator = allocator
 	node := new(Node)
 	node^ = Branch {
 		left   = left,
 		right  = right,
-		weight = get_weight(left), // <-- O(log-n)
+		weight = get_weight(left),
 	}
 	return node
 }
-//
-// finds the leaf containing p and its parent branch (expects in-bounds)
-//O(log-n)
-find_node :: proc(root: ^Node, cursor: Position) -> (parent: ^Node, leaf: string, current: Position) {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
-
-	node := root
-	parent = nil
-	stop := false
-	current = cursor
-	for {
-		next: ^Node
-		switch n in node {
-		case (Branch):
-			if current >= n.weight && n.right != nil {
-				next = n.right
-				current -= n.weight
-			} else if n.left != nil {
-				next = n.left
-			} else {
-				invalid_code_path(#procedure)
-			}
-		case (Leaf):
-			if current >= len(n) {
-				panic(fmt.tprintf("Index [%v] exceeds length of Leaf: [%s], len: [%v]", current, string(n), len(n)))
-			}
-			// if current >= len(n) {current -= len(n)}
-			stop = true
-			leaf = n
-		}
-		if stop {break}
-		parent = node
-		node = next
-	}
-	return parent, leaf, current
-}
-trace_to :: proc(root: ^Node, cursor: Position) -> (trace: [dynamic]Trace, current: Position) {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
-
+trace_to :: proc(rope: ^Rope, cursor: Position) -> (trace: [dynamic]Trace, current: Position) {
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	trace = make([dynamic]Trace)
-	node := root
+	node := rope.head
 	stop := false
 	current = cursor
 	next_is_left := false
@@ -152,6 +108,7 @@ trace_to :: proc(root: ^Node, cursor: Position) -> (trace: [dynamic]Trace, curre
 	for {
 		is_left = next_is_left
 		next: ^Node
+		length := 0
 		switch n in node {
 		case (Branch):
 			if current >= n.weight && n.right != nil {
@@ -164,7 +121,8 @@ trace_to :: proc(root: ^Node, cursor: Position) -> (trace: [dynamic]Trace, curre
 				invalid_code_path(#procedure)
 			}
 		case (Leaf):
-			if current >= len(n) {current = -1}
+			length = len(n)
+			if current >= length {current = -1}
 			stop = true
 		}
 		append(&trace, Trace{node, is_left})
@@ -173,18 +131,79 @@ trace_to :: proc(root: ^Node, cursor: Position) -> (trace: [dynamic]Trace, curre
 	}
 	return trace, current
 }
-split :: proc(root: ^Node, cursor: Position) -> (did_split: bool, right_tree: ^Node) {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
-	if cursor == 0 {return}
-	parent, leaf, current := find_node(root, cursor)
-	(&parent.(Branch)).left = split_leaf(parent.(Branch).left, current)
 
-	return true, nil
+LeafIter :: struct {
+	trace: [dynamic]Trace,
 }
-// Replaces a leaf with a branch, and with two leaves
-// Frees original leaf
+
+into_iter :: proc(trace: [dynamic]Trace) -> LeafIter {
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	return LeafIter{trace = trace} // clone it??
+}
+next_leaf :: proc(it: ^LeafIter) -> (node: ^Node, ok: bool) {
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	// fmt.println(it.trace)
+	start_trace := pop(&it.trace)
+	previous := start_trace.self // remove the leaf
+	going_up := false
+	for {
+		current := it.trace[len(it.trace) - 1].self
+		switch n in current {
+		case (Branch):
+			// Move from the left child to the right child
+			if n.left == previous {
+				//
+
+				append(&it.trace, Trace{n.right, false}) // move into the right
+			} else if n.right == previous {
+				// Go up the tree until we can move from the left child to the right child
+				going_up = true
+				for going_up {
+					previous = current
+					current = it.trace[len(it.trace) - 1].self
+					// Move from the left child to the right child
+					if current.(Branch).left == previous {
+						going_up = false
+						branch_right := (&current.(Branch)).right
+						//
+						append(&it.trace, Trace{branch_right, false}) // move into the right
+					} else {
+						// Keep going up the tree
+						pop(&it.trace)
+						if len(it.trace) == 0 {return nil, false} 	// No more leaves
+					}
+				}
+			} else {
+				// Go down the left-most unvisited nodes
+				for {
+					switch k in current {
+					case (Branch):
+						assert(k.left != nil, "Left Nil?!")
+						append(&it.trace, Trace{k.left, true})
+						current = k.left
+					case (Leaf):
+						return current, true // Found the next leaf
+					}
+				}
+			}
+		case (Leaf):
+			return current, true // Found the next leaf
+		}
+		previous = current
+	}
+	return nil, false
+}
+
+split :: proc(root: ^Node, cursor: Position) -> (did_split: bool, right_tree: ^Node) {
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	if cursor == 0 {return}
+	invalid_code_path("NOT IMPL")
+	return false, nil
+}
+// Replaces a leaf with a branch, and with two leaves.
+// calls `free(old_leaf)`
 split_leaf :: proc(leaf_node: ^Node, local: Position) -> ^Node {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 
 	leaf := leaf_node.(Leaf)
 	left := new(Node)
@@ -198,10 +217,7 @@ split_leaf :: proc(leaf_node: ^Node, local: Position) -> ^Node {
 }
 // Expects n & n.right to be Branches
 rotate_left :: proc(n: ^Node) -> ^Node {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
-
-	// fmt.println("ROL", n)
-
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	b := (&n.(Branch))
 	pivot := b.right
 	p := (&pivot.(Branch))
@@ -213,9 +229,7 @@ rotate_left :: proc(n: ^Node) -> ^Node {
 }
 // Expects n & n.left to be Branches
 rotate_right :: proc(n: ^Node) -> ^Node {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
-
-	// fmt.println("ROR", n)
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	b := (&n.(Branch))
 	pivot := b.left
 	p := (&pivot.(Branch))
@@ -226,8 +240,7 @@ rotate_right :: proc(n: ^Node) -> ^Node {
 	return pivot
 }
 rebalance :: proc(node: ^^Node) {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
-
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	np := &node^.(Branch)
 	balance := get_height(np.left) - get_height(np.right)
 	if balance > 1 {
@@ -247,8 +260,7 @@ rebalance :: proc(node: ^^Node) {
 	}
 }
 insert_text :: proc(rope: ^Rope, cursor: Position, text: string) {
-	spall.SCOPED_EVENT(&spall_ctx, &spall_buffer, #procedure)
-
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	if rope.head == nil {
 		leaf := new(Node)
 		leaf^ = text
@@ -256,7 +268,7 @@ insert_text :: proc(rope: ^Rope, cursor: Position, text: string) {
 		rope.head = node
 		return
 	}
-	trace, current := trace_to(rope.head, cursor)
+	trace, current := trace_to(rope, cursor)
 	defer delete(trace)
 	trace_leaf := trace[len(trace) - 1]
 	parent := trace[len(trace) - 2]
@@ -282,8 +294,91 @@ insert_text :: proc(rope: ^Rope, cursor: Position, text: string) {
 			parent_branch.left = split_leaf
 		} else {
 			parent_branch.right = split_leaf
-
 		}
 	}
 	rebalance(&rope.head)
+}
+
+DeleteMe :: struct {
+	parent:      ^Node,
+	leaf:        ^Node,
+	local_start: int,
+	local_end:   int,
+}
+
+import "core:mem"
+delete_text :: proc(rope: ^Rope, cursor: Position, count: int) {
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	if count <= 0 {return}
+	trace, current := trace_to(rope, cursor)
+	defer delete(trace)
+	delmes := make([dynamic]DeleteMe)
+	defer delete(delmes)
+
+	end := cursor + count
+	remaining := count
+
+	it := into_iter(trace)
+	current_node := it.trace[len(it.trace) - 1].self
+	ok := true
+	for remaining > 0 && ok {
+		#partial switch n in current_node {
+		case (Leaf):
+			local_start := current // zero after first iter
+			local_end := min(end - cursor, len(n))
+			remaining -= local_end - local_start
+			parent := it.trace[len(it.trace) - 2].self // Leaf must be under a branch .. cannot be out of bounds
+			append(&delmes, DeleteMe{parent, current_node, local_start, local_end})
+		}
+		current_node, ok = next_leaf(&it)
+		if !ok {break}
+		current = 0 // need actual value for first iter of loop and then not after
+	}
+	fmt.println("TODO: math seems off in the delme calcs, taking too much")
+	for d in delmes {
+		fmt.println(d) // TODO: math seems off in the delme calcs, taking too much
+		parent_node := d.parent
+		parent_branch := &parent_node.(Branch)
+		leaf_node := d.leaf
+		leaf_str := leaf_node.(Leaf)
+		local_start := d.local_start
+		local_end := d.local_end
+		if local_start == 0 && local_end == len(leaf_str) {
+			// Whole leaf is deleted, remove the leaf from the tree
+			if parent_branch.left == leaf_node {
+				free(parent_branch.left)
+				parent_branch.left = nil //note: this makes the tree invalid atm
+			} else {
+				free(parent_branch.right)
+				parent_branch.right = nil
+			}
+		} else if local_start == 0 {
+			// Left part is deleted, update the leaf content
+			leaf_node^ = strings.clone(leaf_str[local_end:])
+		} else if local_end == len(leaf_str) {
+			// Right part is deleted, update the leaf content
+			leaf_node^ = strings.clone(leaf_str[:local_start])
+		} else {
+			// Middle part is deleted, split the leaf into two
+			left := new(Node)
+			left^ = strings.clone(leaf_str[:local_start])
+			right := new(Node)
+			right^ = strings.clone(leaf_str[local_end:])
+			new_branch := concat(left, right)
+			if parent_branch.left == leaf_node {
+				parent_branch.left = new_branch
+			} else {
+				parent_branch.right = new_branch
+			}
+		}
+	}
+
+	// Rebalance the tree
+	// for i := len(trace) - 1; i > 0; i -= 1 {
+	// 	node := trace[i].self
+	// 	#partial switch n in node {
+	// 	case (Branch):
+	// 		rebalance(&node)
+	// 	}
+	// }
 }
