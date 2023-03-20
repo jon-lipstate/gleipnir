@@ -8,20 +8,24 @@ import "core:math/rand"
 
 Allocator :: runtime.Allocator
 //////////////////////////////////
+// Height must be 2^H to remain efficient, 1<<20 gives 4.2 gb file size
 MAX_HEIGHT :: 4
 SkipNode :: struct {
-	cursor_start: int, // update on traversals?
-	node:         ^Node,
-	next:         ^SkipNode,
-	down:         ^SkipNode,
+	node: ^Node,
+	next: ^SkipNode,
+	prev: ^SkipNode,
+	down: ^SkipNode,
+	up:   ^SkipNode,
 }
 
 Node :: struct {
-	str:        string,
-	level:      int,
-	is_deleted: bool,
-	next:       ^Node,
-	prev:       ^Node,
+	str:          string,
+	cursor_start: int,
+	level:        int,
+	is_deleted:   bool,
+	up:           ^SkipNode,
+	next:         ^Node,
+	prev:         ^Node,
 }
 
 Rope :: struct {
@@ -29,7 +33,8 @@ Rope :: struct {
 	size:       int,
 	rng:        rand.Rand,
 	head:       ^Node,
-	freelist:   ^Node,
+	free_node:  ^Node,
+	free_skips: ^SkipNode,
 	index:      [MAX_HEIGHT]^SkipNode, // len(index) -1 is highest node in the tower
 	max_level:  int,
 	allocator:  Allocator,
@@ -158,9 +163,9 @@ DLL_REMOVE :: proc(target: ^$T) {
 	if target.prev != nil {target.prev.next = target.next}
 }
 FREELIST_APPEND :: proc(rope: ^Rope, node: ^Node) {
-	if rope.freelist == nil {rope.freelist = node} else {
-		node.next = rope.freelist
-		rope.freelist = node
+	if rope.free_node == nil {rope.free_node = node} else {
+		node.next = rope.free_node
+		rope.free_node = node
 	}
 }
 import "core:intrinsics"
@@ -168,8 +173,6 @@ make_rope :: proc(allocator := context.allocator) -> ^Rope {
 	context.allocator = allocator
 	r := new(Rope, allocator)
 	r.allocator = allocator
-	r.head = nil // Todo: switch to sentinel?
-
 	r.rng = rand.create(u64(intrinsics.read_cycle_counter()))
 	r.max_level = 0
 	return r
@@ -233,4 +236,76 @@ print_rope :: proc(rope: ^Rope) {
 		}
 	}
 	fmt.println()
+}
+///////////////////////////////////////
+random_tower_height :: proc(rope: ^Rope) -> int {
+	tower_height := int(rand.float64_range(1, 1 << MAX_HEIGHT, &rope.rng))
+	final_level := MAX_HEIGHT - 1
+	for level: uint = 0; level < MAX_HEIGHT; level += 1 {
+		// If the current level is included, return the current level
+		if tower_height & (1 << level) != 0 {
+			final_level = int(level)
+			break
+		}
+	}
+	rope.max_level = max(rope.max_level, final_level)
+	// If none of the levels were included, return the maximum height
+	return final_level
+}
+
+//  [3]                               [3]                         [3]
+//  [2]                               [2]                         [2]
+//  [1]          [1]    [1]           [1]                         [1]
+//  [0]   [0]    [0]    [0]    [0]    [0]    [0]    [0]    [0]    [0]    [0]
+// [ 5 ] [10]   [ 1 ]  [ 4 ]  [ 5 ]  [10 ]  [ 10]  [ 1 ]  [ 1 ]  [ 5 ]  [10 ]
+//  5     15     16     20     25     35     45     46     47     52     62
+RopeIter :: struct {
+	skips:   [MAX_HEIGHT]^SkipNode,
+	offsets: [MAX_HEIGHT]int,
+}
+iter_to :: proc(rope: ^Rope, cursor: int) -> RopeIter {
+	it := RopeIter{}
+	height := rope.max_level
+	skip := rope.index[height]
+	current_cursor := 0
+	//
+	for {
+		if skip.next == nil || current_cursor + skip.next.node.cursor_start > cursor {
+			it.skips[height] = skip
+			it.offsets[height] = current_cursor
+			height -= 1
+			skip = skip.down
+			if skip.down == nil {break}
+			if height < 0 {panic("mismatch")}
+		}
+		current_cursor += skip.node.cursor_start
+		skip = skip.next
+	}
+	assert(skip.down == nil && height == 0)
+	return it
+}
+find_skips :: proc(rope: ^Rope, cursor_pos: int, max_level: int) -> [MAX_HEIGHT]^SkipNode {
+	found_node, found_pos := find_node(rope, cursor_pos)
+	prev_skips := [MAX_HEIGHT]^SkipNode{}
+	current_level := rope.max_level
+	skip := rope.index[current_level] // Highest Index is the highest level in the tower
+	for current_level > 0 {
+		if skip != nil {break}
+		current_level -= 1
+		skip = rope.index[current_level]
+	}
+	if skip != nil {
+		for skip.down != nil && current_level > 0 {
+			next := skip.next
+			if next != nil && next.node.cursor_start < found_pos {
+				skip = next
+			} else {
+				prev_skips[current_level] = skip
+				skip = skip.down
+				current_level -= 1
+			}
+		}
+	}
+
+	return prev_skips
 }

@@ -6,4 +6,5 @@ other/
 *.bin
 *.so
 ols.json
+*.spall
 scratch*
