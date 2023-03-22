@@ -29,27 +29,15 @@ main :: proc() {
 	insert_text(rope, 8, "Easy")
 	insert_text(rope, 12, "Peasy")
 	insert_text(rope, 8, "_NOT_")
+	// print_rope(rope) // (Ropes)(Are)(_NOT_)(Easy)(Peasy)
+
 	delete_text(rope, 2, 12)
 	insert_text(rope, 2, "pes")
-	// fmt.print("ROPE  :: ")
-	// print_in_order(rope.head)
-	// fmt.println()
-	// print_rope(rope)
-
-	// insert_text(rope, 5, "Are")
-
-	// fmt.print("AFTER  :: ")
-	// print_in_order(rope.head)
-	// fmt.println()
-	// print_rope(rope)
-	// insert_text(rope, 7, "E")
-	// insert_text(rope, 8, "_NOT_")
-
-	// // right := split(rope, 7)
-
-	// fmt.print("\nRight :: ")
-	// // print_rope(right)
-	// print_in_order(right.head)
+	insert_text(rope, 5, "Are")
+	insert_text(rope, 7, "E")
+	insert_text(rope, 8, "_NOT_")
+	delete_text(rope, 13, 1)
+	insert_text(rope, 13, "e")
 
 	// print_rope(rope) // (Ropes)(Are)(_NOT_)(Easy)(Peasy)
 }
@@ -62,10 +50,10 @@ Trace :: struct {
 	self:    ^Node,
 	// using _: struct #raw_union {
 	// 	self: ^Node,
-	// 	slot: ^^Node,
 	// },
 	is_left: bool,
-	// is_slot: bool,
+	is_slot: bool,
+	slot:    ^^Node,
 }
 Position :: int
 Branch :: struct {
@@ -117,9 +105,9 @@ get_weight :: proc(node: ^Node, updating: bool = false) -> int {
 concat :: proc(left: ^Node, right: ^Node, allocator := context.allocator) -> ^Node {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	//
-	// if left == nil && left == nil {return nil}
-	// if left == nil {return right}
-	// if right == nil {return left}
+	if left == nil && left == nil {return nil}
+	if left == nil {return right}
+	if right == nil {return left}
 	//
 	node := new(Node, allocator)
 	node^ = Branch {
@@ -134,8 +122,8 @@ split :: proc(rope: ^Rope, cursor: Position, allocator := context.allocator) -> 
 	if cursor == 0 || rope == nil {return nil}
 	trace, current := trace_to(rope, cursor)
 	defer delete(trace)
-	if current == -1 {return nil} 	// beyond the string
-	if len(trace) == 0 {panic("todo,split the root")}
+	if current == -1 {return nil} 	// beyond the string (No-Op)
+	if len(trace) == 0 {return nil} 	// not sure what to do with this one..
 	//
 	trace_leaf: Trace = pop(&trace)
 	parent: ^Node = trace[len(trace) - 1].self
@@ -191,6 +179,8 @@ split :: proc(rope: ^Rope, cursor: Position, allocator := context.allocator) -> 
 		}
 		was_left = t.is_left
 	}
+	// cleanup_tree(right_tree)
+	// cleanup_tree(rope)
 	return right_tree
 }
 as_branch :: #force_inline proc(node: ^Node) -> ^Branch {
@@ -220,11 +210,10 @@ append_node :: proc(rope: ^Rope, node: ^Node) {
 	defer delete(trace)
 	assert(current == -1) // otherwise we're not at end of rope
 	trace_leaf := pop(&trace)
-	// if trace_leaf.is_slot {
-	// 	// trace_leaf.slot^ = node
-	// 	// fmt.println("EMPTY SLOT-DEAL-WITH-IT")
-	// 	return
-	// }
+	if trace_leaf.is_slot {
+		trace_leaf.slot^ = node
+		return
+	}
 	// case: rope has one leaf only:
 	if len(trace) == 0 {
 		rope.head = concat(trace_leaf.self, node)
@@ -236,6 +225,14 @@ append_node :: proc(rope: ^Rope, node: ^Node) {
 		parent_branch.right = node
 	} else {
 		parent_branch.right = concat(parent_branch.right, node)
+	}
+
+	if root, rok := (&rope.head.(Branch)); rok {
+		if root.right == nil {
+			tmp := root.left
+			free(root)
+			rope.head = tmp
+		}
 	}
 	rebalance(&rope.head)
 }
@@ -282,9 +279,11 @@ trace_to :: proc(
 				next_is_left = true
 			} else {
 				// fmt.printf("Appended Address: %p\n", &node)
-				// append(&trace, Trace{slot = &node, is_left = is_left, is_slot = true})
-				invalid_code_path(#procedure)
-				// return trace, -1 // is -1 always correct?
+				ptr: ^^Node
+				ptr = &(&trace[len(trace) - 1].self.(Branch)).right
+				append(&trace, Trace{slot = ptr, is_left = is_left, is_slot = true})
+				// invalid_code_path(#procedure)
+				return trace, -1 // is -1 always correct?
 			}
 		case (Leaf):
 			length = len(n)
@@ -383,22 +382,24 @@ rotate_right :: proc(n: ^Node) -> ^Node {
 }
 rebalance :: proc(node: ^^Node) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	np := &node^.(Branch)
-	balance := get_height(np.left) - get_height(np.right)
-	if balance > 1 {
-		np_left := &np.left.(Branch)
-		if get_height(np_left.left) < get_height(np_left.right) {
-			np.left = rotate_left(np.left)
+	if node == nil {return}
+	if np, ok := &node^.(Branch); ok {
+		balance := get_height(np.left) - get_height(np.right)
+		if balance > 1 {
+			np_left := &np.left.(Branch)
+			if get_height(np_left.left) < get_height(np_left.right) {
+				np.left = rotate_left(np.left)
+			}
+			node^ = rotate_right(node^)
+		} else if balance < -1 {
+			np_right := &np.right.(Branch)
+			if get_height(np_right.right) < get_height(np_right.left) {
+				np.right = rotate_right(np.right)
+			}
+			node^ = rotate_left(node^)
+		} else {
+			update_weight(node^)
 		}
-		node^ = rotate_right(node^)
-	} else if balance < -1 {
-		np_right := &np.right.(Branch)
-		if get_height(np_right.right) < get_height(np_right.left) {
-			np.right = rotate_right(np.right)
-		}
-		node^ = rotate_left(node^)
-	} else {
-		update_weight(node^)
 	}
 }
 insert_text :: proc(rope: ^Rope, cursor: Position, text: string) {
@@ -410,6 +411,7 @@ insert_text :: proc(rope: ^Rope, cursor: Position, text: string) {
 		return
 	}
 	right_tree := split(rope, cursor)
+
 	append_node(rope, make_leaf(text))
 	if right_tree != nil {
 		rope.head = concat(rope.head, right_tree.head)
@@ -423,8 +425,6 @@ delete_text :: proc(rope: ^Rope, cursor: Position, count: int) {
 	if count <= 0 {return}
 	middle_tree := split(rope, cursor)
 	right_tree := split(middle_tree, count)
-	cleanup_tree(rope)
-	cleanup_tree(right_tree)
 	rope.head = concat(rope.head, right_tree.head)
 	free(right_tree)
 	delete_rope(middle_tree)
@@ -439,53 +439,59 @@ delete_rope :: proc(rope: ^Rope) {
 cleanup_tree :: proc(tree: ^Rope) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	if tree == nil || tree.head == nil {return}
+	fmt.print("Cleanup Before:: ")
+	print_in_order(tree.head)
+	fmt.println()
 
 	stack := make([dynamic]^Node)
-	// Push the root node onto the stack
 	append(&stack, tree.head)
 
 	for len(stack) > 0 {
 		current := pop(&stack)
-
-		switch n in current {
+		switch node in current {
 		case (Branch):
-			if n.left != nil && n.right == nil {
-				// Replace the current branch node with its left child
+			// Left subtree has data:
+			if node.left != nil && node.right == nil {
+				// edge case for tree's head (concat with one item on the head)
 				if tree.head == current {
-					tree.head = n.left
+					tree.head = node.left
+					fmt.println("fix left")
 				} else {
-					parent := stack[len(stack) - 1]
-					if as_branch(parent).left == current {
-						as_branch(parent).left = n.left
-					} else {
-						as_branch(parent).right = n.left
+					// Replace the current branch node with its left child
+					next := stack[len(stack) - 1]
+					switch nxt in next {
+					case (Branch):
+						panic("not impl")
+					case (Leaf):
+					//nop
 					}
 				}
-				append(&stack, n.left) // Continue with the left child
-			} else if n.left == nil && n.right != nil {
+				append(&stack, node.left) // Continue with the left child
+			} else if node.left == nil && node.right != nil {
 				// Replace the current branch node with its right child
 				if tree.head == current {
-					tree.head = n.right
+					tree.head = node.right
+					fmt.println("fix right")
+
 				} else {
 					parent := stack[len(stack) - 1]
-					if as_branch(parent).left == current {
-						as_branch(parent).left = n.right
-					} else {
-						as_branch(parent).right = n.right
-					}
+					panic("not impl")
 				}
-				append(&stack, n.right) // Continue with the right child
+				append(&stack, node.right) // Continue with the right child
 			} else {
 				// Push left and right children onto the stack
-				if n.left != nil {
-					append(&stack, n.left)
+				if node.left != nil {
+					append(&stack, node.left)
 				}
-				if n.right != nil {
-					append(&stack, n.right)
+				if node.right != nil {
+					append(&stack, node.right)
 				}
 			}
 		case (Leaf):
 		// Do nothing for leaf nodes
 		}
 	}
+	fmt.print("Cleanup After:: ")
+	print_in_order(tree.head)
+	fmt.println()
 }
