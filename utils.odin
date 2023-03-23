@@ -7,22 +7,25 @@ import "core:strings"
 invalid_code_path :: proc(p: string) {
 	if true {panic(fmt.tprintf("Invalid Code Path - %v", p))}
 }
+unreachable :: proc(p: string) {
+	if true {panic(fmt.tprintf("Unreachable Code Path - %v", p))}
+}
 //
 print_node :: proc(node: ^Node) {
-	if _, ok := node.(Branch); ok {
+	if _, ok := node.kind.(Branch); ok {
 		print_rope(&Rope{node})
 	} else {
-		fmt.println(node.(Leaf))
+		fmt.println(node.kind.(Leaf))
 	}
 }
 print_rope :: proc(rope: ^Rope) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	sb := strings.builder_make_len_cap(0, 2 * rope.head.(Branch).weight)
+	sb := strings.builder_make_len_cap(0, 2 * rope.head.kind.(Branch).weight)
 	defer delete(sb.buf)
 	print_node :: proc(node: ^Node, buf: ^strings.Builder) {
 		TRACE(&spall_ctx, &spall_buffer, #procedure)
 		if node == nil {return}
-		switch n in node {
+		switch n in node.kind {
 		case (Branch):
 			print_node(n.left, buf)
 			print_node(n.right, buf)
@@ -47,7 +50,7 @@ print_in_order :: proc(node: ^Node) {
 		fmt.print("<nil>")
 		return
 	}
-	switch n in node {
+	switch n in node.kind {
 	case (Branch):
 		fmt.print("(")
 		print_in_order(n.left)
@@ -71,7 +74,7 @@ get_height_iterative :: proc(node: ^Node) -> int {
 		size := len(stack)
 		for size > 0 {
 			front := pop_front(&stack)
-			if br, ok := &front.(Branch); ok {
+			if br, ok := &front.kind.(Branch); ok {
 				if br.left != nil {append(&stack, br.left)}
 				if br.right != nil {append(&stack, br.right)}
 			}
