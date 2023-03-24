@@ -44,6 +44,39 @@ print_rope :: proc(rope: ^Rope) {
 	print_to_console(str)
 }
 
+print_parent_ptrs :: proc(node: ^Node, prefix: string = "") {
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	if len(prefix) > 0 {
+		fmt.print(prefix, ":: ")
+	}
+	pptr :: proc(node: ^Node) {
+		if node == nil {
+			fmt.print("<nil>")
+			return
+		}
+		switch n in node.kind {
+		case (Branch):
+			if node.parent != nil {
+				fmt.printf("<<<%p>>>[%p](", node, node.parent)
+			} else {
+				fmt.printf("[--](")
+			}
+			pptr(n.left)
+			fmt.print(",")
+			pptr(n.right)
+			fmt.print(")")
+		case (Leaf):
+			if node.parent != nil {
+				fmt.printf("<<%p>>[%p]", node, node.parent)
+			} else {
+				fmt.printf("<-->")
+			}
+		}
+	}
+	pptr(node)
+	fmt.println()
+}
+
 print_in_order :: proc(node: ^Node, prefix: string = "") {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	if len(prefix) > 0 {
