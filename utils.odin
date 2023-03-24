@@ -15,7 +15,7 @@ print_node :: proc(node: ^Node) {
 	if _, ok := node.kind.(Branch); ok {
 		print_rope(&Rope{node})
 	} else {
-		fmt.println(node.kind.(Leaf))
+		fmt.println("Leaf:", node.kind.(Leaf))
 	}
 }
 print_rope :: proc(rope: ^Rope) {
@@ -44,22 +44,29 @@ print_rope :: proc(rope: ^Rope) {
 	print_to_console(str)
 }
 
-print_in_order :: proc(node: ^Node) {
+print_in_order :: proc(node: ^Node, prefix: string = "") {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	if node == nil {
-		fmt.print("<nil>")
-		return
+	if len(prefix) > 0 {
+		fmt.print(prefix, ":: ")
 	}
-	switch n in node.kind {
-	case (Branch):
-		fmt.print("(")
-		print_in_order(n.left)
-		fmt.print(",")
-		print_in_order(n.right)
-		fmt.print(")")
-	case (Leaf):
-		fmt.print(n)
+	pio :: proc(node: ^Node) {
+		if node == nil {
+			fmt.print("<nil>")
+			return
+		}
+		switch n in node.kind {
+		case (Branch):
+			fmt.print("(")
+			pio(n.left)
+			fmt.print(",")
+			pio(n.right)
+			fmt.print(")")
+		case (Leaf):
+			fmt.print(n)
+		}
 	}
+	pio(node)
+	fmt.println()
 }
 get_height_iterative :: proc(node: ^Node) -> int {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)

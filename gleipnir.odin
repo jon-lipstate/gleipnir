@@ -28,18 +28,24 @@ main :: proc() {
 	insert_text(rope, 5, "Are")
 	insert_text(rope, 8, "Easy")
 	insert_text(rope, 12, "Peasy")
+	print_in_order(rope.head, "End-Inserts")
+
 	insert_text(rope, 8, "_NOT_")
 	// print_rope(rope) // (Ropes)(Are)(_NOT_)(Easy)(Peasy)
-
 	delete_text(rope, 2, 12)
+	print_in_order(rope.head, "Deleted 2-12")
+
 	insert_text(rope, 2, "pes")
 	insert_text(rope, 5, "Are")
 	insert_text(rope, 7, "E")
 	insert_text(rope, 8, "_NOT_")
+	print_in_order(rope.head, "Re-inserted")
+
 	delete_text(rope, 13, 1)
 	insert_text(rope, 13, "e")
 
-	// print_rope(rope) // 
+	print_in_order(rope.head) //
+
 }
 //
 Rope :: struct {
@@ -56,8 +62,8 @@ Leaf :: string
 Node :: struct {
 	parent: ^Node,
 	kind:   union {
-		Branch,
 		Leaf,
+		Branch,
 	},
 }
 find :: proc(rope: ^Rope, cursor: Position) -> (leaf: ^Node, current: Position) {
@@ -98,7 +104,7 @@ find :: proc(rope: ^Rope, cursor: Position) -> (leaf: ^Node, current: Position) 
 // Assumes the cursor starts *AFTER* the supplied leaf
 // todo: is that ergonomic?
 // return nil on end of rope??
-find_next :: proc(leaf: ^Node, cursor: Position, allocator := context.allocator) -> (next: ^Node, current: Position) {
+find_next :: proc(leaf: ^Node, cursor: Position) -> (next: ^Node, current: Position) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	current = cursor
 	for {
@@ -165,12 +171,13 @@ find_max :: proc(node: ^Node) -> ^Node {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	if node == nil {return nil}
 	current := node
-	// TODO: YOU ARE HERE
 	for current != nil {
 		switch c in current.kind {
 		case (Branch):
-			assert(c.left != nil)
-			current = c.left
+			if c.right != nil {current = c.right} else {
+				assert(c.left != nil)
+				current = c.left
+			}
 		case (Leaf):
 			return current
 		}
@@ -218,33 +225,41 @@ get_weight :: proc(node: ^Node, updating: bool = false) -> int {
 // Returned node has parent = nil
 concat :: proc(left: ^Node, right: ^Node, allocator := context.allocator) -> ^Node {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	//
 	if left == nil && left == nil {return nil} else if left == nil {return right} else if right == nil {return left}
-	//
 	left_br, left_is_br := &left.kind.(Branch)
 	right_br, right_is_br := &right.kind.(Branch)
 	//
 	if left_is_br && left_br.right == nil {
-		left.parent = nil
-		left_br.right = right
-		right.parent = left
+		set_right_child(left, right)
 		return left
 	} else if right_is_br && right_br.right == nil {
-		right.parent = nil
 		right_br.right = right_br.left
-		right_br.left = left
-		left.parent = right
+		set_left_child(right, left)
+		update_weight(right)
 		return right
 	} else {
 		node := new(Node, allocator)
 		node^ = {
 			parent = nil,
-			kind = Branch{left = left, right = right, weight = get_weight(left)},
+			kind = Branch{weight = get_weight(left)},
 		}
-		left.parent = node
-		right.parent = node
+		set_left_child(node, left)
+		set_right_child(node, right)
 		return node
 	}
+}
+// Requires: node.parent.parent, free(node.parent)
+replace_parent :: proc(node: ^Node) {
+	assert(node.parent != nil)
+	assert(node.parent.parent != nil)
+	grandparent := node.parent.parent
+	parent := node.parent
+	if is_left(parent) {
+		set_left_child(grandparent, node)
+	} else {
+		set_right_child(grandparent, node)
+	}
+	free(parent)
 }
 // can return nil if nop
 split :: proc(rope: ^Rope, cursor: Position, allocator := context.allocator) -> (right_tree: ^Rope) {
@@ -253,72 +268,75 @@ split :: proc(rope: ^Rope, cursor: Position, allocator := context.allocator) -> 
 	node, current := find(rope, cursor)
 	if current == -1 {return nil} 	// beyond the string (nop)
 	//
-	leaf := node.kind.(Leaf) // Expect Leaf - todo: verify for edge cases
-	parent := node.parent
+	leaf := node.kind.(Leaf) // Expect Leaf
+	fmt.printf("Split at (%s)[%v] :: ", leaf, current)
+	print_in_order(rope.head)
+
 	right_tree = new(Rope, allocator)
+	left_tree := &Rope{}
 	split_the_leaf := current > 0 && current < len(leaf)
 	//
 	// Protect for nil parent:
-	if parent == nil && split_the_leaf {
-		left, right := split_leaf(node, current)
-		append_node(right_tree, right)
+	if node.parent == nil && split_the_leaf {
+		left, right := split_leaf(node, current, allocator)
+		append_node(right_tree, right, allocator)
 		rope.head = left
 		left.parent = nil
+		free(left_tree)
 		return right_tree
-	} else if parent == nil {
+	} else if node.parent == nil {
+		free(right_tree)
+		free(left_tree)
 		return nil // this case is move the left tree into the right tree. not sure i want to support
 	}
 	was_left := is_left(node)
-	//
 	// Case: Splitting a leaf in the middle
 	if split_the_leaf {
+		parent := node.parent
 		left, right := split_leaf(node, current)
-		node = parent // node was freed, set to parent
-		append_node(right_tree, right)
-		current = -1 // Current set to invalid state as guard
 		if was_left {
 			set_left_child(parent, left)
-			append_node(right_tree, as_branch(parent).right)
-			as_branch(parent).right = nil
+			node = as_branch(parent).left
 		} else {
 			set_right_child(parent, left)
+			node = as_branch(parent).right
 		}
-		update_weight(parent)
+		append_node(right_tree, right)
+
 	} else if current == 0 {
-		// The entire subtree should move
-		if was_left {
-			grand_parent := parent.parent
-			assert(grand_parent != nil) // todo: replace with guard ..?
-			parent_is_left := is_left(parent)
-			append_node(right_tree, parent)
-			// update_weight(parent)
-			if parent_is_left {
-				as_branch(grand_parent).left = as_branch(grand_parent).right
-			}
-			as_branch(grand_parent).right = nil
-			update_weight(grand_parent)
-			// the right leaf should move:
+		node = node.parent
+		n_is_left := is_left(node)
+		parent := node.parent
+		append_node(right_tree, node)
+		if n_is_left {
+			as_branch(parent).left = nil
 		} else {
-			append_node(right_tree, node)
 			as_branch(parent).right = nil
-			update_weight(parent)
 		}
+		if node.parent != nil {was_left = is_left(node)}
 	} else {
 		// this is off the edge of the tree (guard above should prevent)
 		invalid_code_path(#procedure)
 		return nil
 	}
-
-	for {
+	for node.parent != nil {
 		node = node.parent
 		if was_left {
-			append_node(right_tree, as_branch(node).right)
+			append_node(right_tree, as_branch(node).right, allocator)
 			as_branch(node).right = nil
-			update_weight(node)
+		} else {
+			print_in_order(node, "ELSE")
+			append_node(left_tree, as_branch(node).left, allocator)
 		}
+		update_weight(node)
+
 		if node.parent == nil {break}
 		was_left = is_left(node)
 	}
+	// rope.head = left_tree.head
+	print_in_order(left_tree.head, "SLRope")
+	print_in_order(rope.head, "SRope")
+	print_in_order(right_tree.head, "SRight")
 	return right_tree
 }
 as_branch :: #force_inline proc(node: ^Node) -> ^Branch {
@@ -335,156 +353,108 @@ make_leaf :: proc(str: string, allocator := context.allocator) -> ^Node {
 	leaf^.kind = str
 	return leaf
 }
-append_node :: proc(rope: ^Rope, node: ^Node) {
+append_node :: proc(rope: ^Rope, right: ^Node, allocator := context.allocator) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	// case: rope is empty:
 	if rope.head == nil {
-		rope.head = concat(node, nil)
+		right.parent = nil
+		rope.head = concat(right, nil, allocator)
 		return
 	}
-	if node == nil {return}
-	// todo: replace with for loop, no need for a trace here.
-	trace, current := trace_to(rope, I32MAX)
-	defer delete(trace)
-	assert(current == -1) // otherwise we're not at end of rope
-	trace_leaf := pop(&trace)
-	if trace_leaf.is_slot {
-		trace_leaf.slot^ = node
+	if right == nil {return}
+	left := find_max(rope.head)
+	// left is the root element:
+	if left.parent == nil {
+		rope.head = concat(left, right, allocator)
 		return
-	}
-	// case: rope has one leaf only:
-	if len(trace) == 0 {
-		rope.head = concat(trace_leaf.self, node)
-		return
-	}
-	trace_parent := pop(&trace)
-	parent_branch := as_branch(trace_parent.self)
-	if trace_leaf.is_left {
-		parent_branch.right = node
 	} else {
-		parent_branch.right = concat(parent_branch.right, node)
+		// stash parent-state:
+		parent := left.parent
+		is_left_child := is_left(left)
+		appended := concat(left, right, allocator)
+		if is_left_child {set_left_child(parent, appended)} else {set_right_child(parent, appended)}
 	}
 
-	if root, rok := (&rope.head.(Branch)); rok {
-		if root.right == nil {
-			tmp := root.left
-			free(root)
-			rope.head = tmp
-		}
-	}
-	// TODO: if node.kind == branch,update its weights?
-	rebalance(&rope.head)
 }
 // Replaces a leaf with a branch, and with two leaves.
 // calls `free(old_leaf)`
-split_leaf :: proc(leaf_node: ^Node, local: Position) -> (left: ^Node, right: ^Node) {
+split_leaf :: proc(leaf_node: ^Node, local: Position, allocator := context.allocator) -> (left: ^Node, right: ^Node) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
-
 	leaf := leaf_node.kind.(Leaf)
-	left = make_leaf(strings.clone(leaf[:local]))
-	right = make_leaf(strings.clone(leaf[local:]))
-	// delete(leaf) // TODO: where to alloc strings??
+	left = make_leaf(strings.clone(leaf[:local], allocator))
+	right = make_leaf(strings.clone(leaf[local:], allocator))
+	// TODO: where to delete/make strings??
 	free(leaf_node)
 	return left, right
 }
 
-LeafIter :: struct {
-	trace: [dynamic]Trace,
-}
-into_iter :: proc(trace: [dynamic]Trace) -> LeafIter {
-	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	return LeafIter{trace = trace} // clone it??
-}
-next_leaf :: proc(it: ^LeafIter) -> (node: ^Node, ok: bool) {
-	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	// fmt.println(it.trace)
-	start_trace := pop(&it.trace)
-	previous := start_trace.self // remove the leaf
-	going_up := false
-	for {
-		current := it.trace[len(it.trace) - 1].self
-		switch n in current {
-		case (Branch):
-			// Move from the left child to the right child
-			if n.left == previous {
-				//
-
-				append(&it.trace, Trace{self = n.right, is_left = false}) // move into the right
-			} else if n.right == previous {
-				// Go up the tree until we can move from the left child to the right child
-				going_up = true
-				for going_up {
-					previous = current
-					current = it.trace[len(it.trace) - 1].self
-					// Move from the left child to the right child
-					if current.(Branch).left == previous {
-						going_up = false
-						branch_right := (&current.(Branch)).right
-						//
-						append(&it.trace, Trace{self = branch_right, is_left = false}) // move into the right
-					} else {
-						// Keep going up the tree
-						pop(&it.trace)
-						if len(it.trace) == 0 {return nil, false} 	// No more leaves
-					}
-				}
-			} else {
-				// Go down the left-most unvisited nodes
-				for {
-					switch k in current {
-					case (Branch):
-						assert(k.left != nil, "Left Nil?!")
-						append(&it.trace, Trace{self = k.left, is_left = true})
-						current = k.left
-					case (Leaf):
-						return current, true // Found the next leaf
-					}
-				}
-			}
-		case (Leaf):
-			return current, true // Found the next leaf
-		}
-		previous = current
-	}
-	return nil, false
-}
 // Expects n & n.right to be Branches
-rotate_left :: proc(n: ^Node) -> ^Node {
+rotate_left :: proc(node: ^Node) -> ^Node {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	b := (&n.(Branch))
-	pivot := b.right
-	p := (&pivot.(Branch))
-	b.right = p.left
-	p.left = n
-	update_weight(n)
+	//
+	node_branch := (&node.kind.(Branch))
+	pivot := node_branch.right
+	pivot_branch := (&pivot.kind.(Branch))
+	// early exit (dont have 3 children):
+	if pivot_branch.right == nil {
+		set_right_child(node, pivot_branch.left)
+		free(pivot)
+		return node
+	}
+	if node.parent != nil {
+		if is_left(node) {
+			set_left_child(node.parent, pivot)
+		} else {
+			set_right_child(node.parent, pivot)
+		}
+	}
+	set_right_child(node, pivot_branch.left)
+	set_left_child(pivot, node)
+	//
+	update_weight(node)
 	update_weight(pivot)
 	return pivot
 }
 // Expects n & n.left to be Branches
-rotate_right :: proc(n: ^Node) -> ^Node {
+rotate_right :: proc(node: ^Node) -> ^Node {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	b := (&n.(Branch))
-	pivot := b.left
-	p := (&pivot.(Branch))
-	b.left = p.right
-	p.right = n
-	update_weight(n)
+	//
+	node_branch := (&node.kind.(Branch))
+	pivot := node_branch.left
+	pivot_branch := (&pivot.kind.(Branch))
+	// early exit (dont have 3 children):
+	if pivot_branch.right == nil {
+		set_left_child(node, pivot_branch.left)
+		free(pivot)
+		return node
+	}
+	if node.parent != nil {
+		if is_left(node) {
+			set_left_child(node.parent, pivot)
+		} else {
+			set_right_child(node.parent, pivot)
+		}
+	}
+	set_left_child(node, pivot_branch.right)
+	set_right_child(pivot, node)
+	//
+	update_weight(node)
 	update_weight(pivot)
 	return pivot
 }
 rebalance :: proc(node: ^^Node) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	if node == nil {return}
-	if np, ok := &node^.(Branch); ok {
+	if np, ok := &node^.kind.(Branch); ok {
 		balance := get_height(np.left) - get_height(np.right)
 		if balance > 1 {
-			np_left := &np.left.(Branch)
+			np_left := &np.left.kind.(Branch)
 			if get_height(np_left.left) < get_height(np_left.right) {
 				np.left = rotate_left(np.left)
 			}
 			node^ = rotate_right(node^)
 		} else if balance < -1 {
-			np_right := &np.right.(Branch)
+			np_right := &np.right.kind.(Branch)
 			if get_height(np_right.right) < get_height(np_right.left) {
 				np.right = rotate_right(np.right)
 			}
@@ -494,96 +464,65 @@ rebalance :: proc(node: ^^Node) {
 		}
 	}
 }
-insert_text :: proc(rope: ^Rope, cursor: Position, text: string) {
+insert_text :: proc(rope: ^Rope, cursor: Position, text: string, allocator := context.allocator) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	fmt.println(">>>Insert", cursor, text)
+	// case - Empty Rope:
 	if rope.head == nil {
-		leaf := make_leaf(text)
-		node := concat(leaf, nil)
+		leaf := make_leaf(text, allocator)
+		node := concat(leaf, nil, allocator)
 		rope.head = node
 		return
+		//case - Root Element:
 	}
-	right_tree := split(rope, cursor)
 
-	append_node(rope, make_leaf(text))
+	right_tree := split(rope, cursor)
+	append_node(rope, make_leaf(text, allocator))
 	if right_tree != nil {
-		rope.head = concat(rope.head, right_tree.head)
+		print_in_order(rope.head, "Joining Right Tree:")
+		rope.head = concat(rope.head, right_tree.head, allocator)
+		// fmt.print("IRope :: ")
+		// print_in_order(rope.head)
+		// fmt.print("IRight :: ")
+		// print_in_order(right_tree.head)
 	}
+	fmt.printf("Post-Insert Rebalance :: ")
+	print_in_order(rope.head)
 	rebalance(&rope.head)
 }
 
 import "core:mem"
-delete_text :: proc(rope: ^Rope, cursor: Position, count: int) {
+delete_text :: proc(rope: ^Rope, cursor: Position, count: int, allocator := context.allocator) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	fmt.println(">>>Delete", cursor, count)
+
 	if count <= 0 {return}
-	middle_tree := split(rope, cursor)
-	right_tree := split(middle_tree, count)
-	rope.head = concat(rope.head, right_tree.head)
-	free(right_tree)
+	print_in_order(rope.head, "BEFORE-DELETE")
+	middle_tree := split(rope, cursor, allocator)
+	print_in_order(middle_tree.head, "middle_tree")
+	right_tree := split(middle_tree, count, allocator)
+	print_in_order(right_tree.head, "right_tree")
+	print_in_order(rope.head, "rope")
+
+	if right_tree != nil {
+		rope.head = concat(rope.head, right_tree.head, allocator)
+		free(right_tree)
+	}
 	delete_rope(middle_tree)
 	rebalance(&rope.head)
-	// print_in_order(rope.head)
-	// fmt.println()
 }
 delete_rope :: proc(rope: ^Rope) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
-}
-
-cleanup_tree :: proc(tree: ^Rope) {
-	TRACE(&spall_ctx, &spall_buffer, #procedure)
-	if tree == nil || tree.head == nil {return}
-	fmt.print("Cleanup Before:: ")
-	print_in_order(tree.head)
-	fmt.println()
-
-	stack := make([dynamic]^Node)
-	append(&stack, tree.head)
-
-	for len(stack) > 0 {
-		current := pop(&stack)
-		switch node in current {
+	delete_node :: proc(node: ^Node) {
+		TRACE(&spall_ctx, &spall_buffer, #procedure)
+		if node == nil {return}
+		switch n in node.kind {
 		case (Branch):
-			// Left subtree has data:
-			if node.left != nil && node.right == nil {
-				// edge case for tree's head (concat with one item on the head)
-				if tree.head == current {
-					tree.head = node.left
-					fmt.println("fix left")
-				} else {
-					// Replace the current branch node with its left child
-					next := stack[len(stack) - 1]
-					switch nxt in next {
-					case (Branch):
-						panic("not impl")
-					case (Leaf):
-					//nop
-					}
-				}
-				append(&stack, node.left) // Continue with the left child
-			} else if node.left == nil && node.right != nil {
-				// Replace the current branch node with its right child
-				if tree.head == current {
-					tree.head = node.right
-					fmt.println("fix right")
-
-				} else {
-					parent := stack[len(stack) - 1]
-					panic("not impl")
-				}
-				append(&stack, node.right) // Continue with the right child
-			} else {
-				// Push left and right children onto the stack
-				if node.left != nil {
-					append(&stack, node.left)
-				}
-				if node.right != nil {
-					append(&stack, node.right)
-				}
-			}
+			delete_node(n.left)
+			delete_node(n.right)
 		case (Leaf):
-		// Do nothing for leaf nodes
+		// delete(n) // TODO: fix backing storage somewhere...
 		}
+		free(node)
 	}
-	fmt.print("Cleanup After:: ")
-	print_in_order(tree.head)
-	fmt.println()
 }
