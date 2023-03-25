@@ -436,9 +436,9 @@ delete_rope :: proc(rope: ^Rope) {
 cleanup_tree :: proc(tree: ^Rope) {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	if tree == nil || tree.head == nil {return}
-	fmt.print("Cleanup Before:: ")
-	print_in_order(tree.head)
-	fmt.println()
+	// fmt.print("Cleanup Before:: ")
+	// print_in_order(tree.head)
+	// fmt.println()
 
 	stack := make([dynamic]^Node)
 	append(&stack, tree.head)
@@ -452,7 +452,7 @@ cleanup_tree :: proc(tree: ^Rope) {
 				// edge case for tree's head (concat with one item on the head)
 				if tree.head == current {
 					tree.head = node.left
-					fmt.println("fix left")
+					// fmt.println("fix left")
 				} else {
 					// Replace the current branch node with its left child
 					next := stack[len(stack) - 1]
@@ -468,7 +468,7 @@ cleanup_tree :: proc(tree: ^Rope) {
 				// Replace the current branch node with its right child
 				if tree.head == current {
 					tree.head = node.right
-					fmt.println("fix right")
+					// fmt.println("fix right")
 
 				} else {
 					parent := stack[len(stack) - 1]
@@ -488,7 +488,7 @@ cleanup_tree :: proc(tree: ^Rope) {
 		// Do nothing for leaf nodes
 		}
 	}
-	fmt.print("Cleanup After:: ")
-	print_in_order(tree.head)
-	fmt.println()
+	// fmt.print("Cleanup After:: ")
+	// // print_in_order(tree.head)
+	// fmt.println()
 }

@@ -10,6 +10,9 @@ invalid_code_path :: proc(p: string) {
 unreachable :: proc(p: string) {
 	if true {panic(fmt.tprintf("Unreachable Code Path - %v", p))}
 }
+not_implemented :: proc(p: string) {
+	if true {panic(fmt.tprintf("Not Implemented - %v", p))}
+}
 //
 print_node :: proc(node: ^Node) {
 	if _, ok := node.kind.(Branch); ok {
@@ -43,7 +46,25 @@ print_rope :: proc(rope: ^Rope) {
 	}
 	print_to_console(str)
 }
-
+to_string :: proc(rope: ^Rope) -> string {
+	TRACE(&spall_ctx, &spall_buffer, #procedure)
+	sb := strings.builder_make_len_cap(0, 2 * rope.head.kind.(Branch).weight)
+	defer delete(sb.buf)
+	node_to_string :: proc(node: ^Node, buf: ^strings.Builder) {
+		TRACE(&spall_ctx, &spall_buffer, #procedure)
+		if node == nil {return}
+		switch n in node.kind {
+		case (Branch):
+			node_to_string(n.left, buf)
+			node_to_string(n.right, buf)
+		case (Leaf):
+			strings.write_string(buf, n)
+		}
+	}
+	node_to_string(rope.head, &sb)
+	str := strings.to_string(sb)
+	return str
+}
 print_parent_ptrs :: proc(node: ^Node, prefix: string = "") {
 	TRACE(&spall_ctx, &spall_buffer, #procedure)
 	if len(prefix) > 0 {
@@ -89,7 +110,7 @@ print_in_order :: proc(node: ^Node, prefix: string = "") {
 		}
 		switch n in node.kind {
 		case (Branch):
-			fmt.print("(")
+			fmt.printf("[%v](", n.weight)
 			pio(n.left)
 			fmt.print(",")
 			pio(n.right)
@@ -125,4 +146,52 @@ get_height_iterative :: proc(node: ^Node) -> int {
 	}
 
 	return height
+}
+
+assert_parentage :: proc(rope: ^Rope) {
+	if rope == nil {return}
+	assert(rope.head.parent == nil)
+	switch n in rope.head.kind {
+	case (Branch):
+		assert_node_parentage(n.left, rope.head)
+		assert_node_parentage(n.right, rope.head)
+	case (Leaf):
+		assert_node_parentage(rope.head, nil)
+
+	}
+}
+
+assert_node_parentage :: proc(node: ^Node, parent: ^Node) {
+	if node == nil {return}
+	assert(node.parent == parent, "Parent Pointer Corruption")
+	if parent != nil {assert(node.parent.kind != nil, "Parent Union Nil")}
+	#partial switch n in node.kind {
+	case (Branch):
+		assert_node_parentage(n.left, node)
+		assert_node_parentage(n.right, node)
+	}
+}
+
+assert_weights :: proc(rope: ^Rope) {
+	if rope == nil {return}
+	#partial switch n in rope.head.kind {
+	case (Branch):
+		assert_node_weights(n.left)
+		assert_node_weights(n.right)
+	}
+}
+
+assert_node_weights :: proc(node: ^Node) {
+	if node == nil {return}
+	#partial switch n in node.kind {
+	case (Branch):
+		expected_weight := get_weight(n.left, true)
+		if expected_weight != n.weight {
+			fmt.printf("Expected:%v, Got:%v\n", expected_weight, n.weight)
+			print_in_order(node, "Failed_Node::Assert_Weight")
+			panic("Bad Weight")
+		}
+		assert_node_parentage(n.left, node)
+		assert_node_parentage(n.right, node)
+	}
 }
