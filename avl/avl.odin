@@ -209,21 +209,4 @@ main :: proc() {
 		tree = insert(tree, key, key)
 	}
 	print_tree_ascii(tree)
-	// // Search for nodes
-	// for key in keys {
-	// 	node := search(tree, key)
-	// 	fmt.printf("Key: %d, Value: %d\n", node.key, node.value)
-	// }
-	// // Delete nodes
-	// for key in keys {
-	// 	tree = delete(tree, key)
-	// }
 }
-/////////////
-// main :: proc() {
-// 	s := "Ropes are not so easy peasy"
-// 	it := into_iter(s)
-// 	for r in iter_next(&it) {
-// 		fmt.printf("%c", r)
-// 	}
-// }
